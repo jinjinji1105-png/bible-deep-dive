@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <!-- 모바일 반응형 디자인을 위한 필수 메타 태그 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>바이블 딥다이브 (Swing2App용)</title>
+    <!-- Tailwind CSS CDN 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 배경 및 폰트 설정 */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1f2937; /* Dark background */
+            color: #e5e7eb; /* Light text */
+        }
+        /* 스크롤바 스타일링 (결과창) */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #374151; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #6366f1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4f46e5; }
+
+        /* API 결과창의 마크다운 스타일링 */
+        .markdown-output h1, .markdown-output h2, .markdown-output h3 {
+            font-weight: bold;
+            color: #818cf8; /* Indigo/Violet for headers */
+            padding-bottom: 5px;
+            margin-top: 1.5rem;
+            border-bottom: 1px solid #4b5563; /* Gray-600 */
+        }
+        .markdown-output p { margin-top: 0.5rem; }
+        .markdown-output ul, .markdown-output ol { margin-left: 1.5rem; list-style-type: disc; }
+        .markdown-output li { margin-bottom: 0.25rem; }
+    </style>
+</head>
+<body class="p-0 m-0">
+    <!-- 메인 컨테이너: 최대 너비 설정으로 모바일 중앙 정렬 유지 -->
+    <div id="app" class="w-full max-w-lg mx-auto bg-gray-800 min-h-screen shadow-2xl">
+        <!-- Header: 스티키 헤더로 화면 상단에 고정 -->
+        <div class="p-4 border-b border-gray-700 flex items-center justify-between sticky top-0 bg-gray-800 z-10">
+            <h1 class="text-xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500">
+                바이블 딥다이브 (다국어 지원)
+            </h1>
+            <div class="flex items-center space-x-3">
+                <!-- 언어 토글 버튼 -->
+                <button id="lang-toggle" class="text-sm font-semibold p-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white transition shadow-md w-12">
+                    KO
+                </button>
+                <!-- 공통 뒤로가기 버튼 (상단) -->
+                <button id="back-button" class="text-white hover:text-cyan-400 transition hidden">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- 메인 콘텐츠 영역 -->
+        <div id="content-area" class="p-4 pb-6">
+            <!-- JavaScript가 콘텐츠를 렌더링할 영역 -->
+        </div>
+
+        <!-- 푸터 버튼 영역 (해석 결과 화면에서만 표시) -->
+        <div id="footer-button-area" class="p-4 border-t border-gray-700 hidden sticky bottom-0 bg-gray-800">
+            <button id="footer-back-button" class="w-full py-3 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-lg transition">
+                다른 주제 선택 화면으로 돌아가기
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. LLM API 설정 및 데이터 ---
+        
+        // 주의: Swing2App 환경에서는 API Key를 서버에서 직접 관리하는 것이 보안에 더 좋지만, 
+        // 이 코드에서는 Canvas 환경 제약에 따라 빈 문자열로 처리하며, 런타임에 자동으로 제공됩니다.
+        const API_MODEL = 'gemini-2.5-flash-preview-09-2025';
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${API_MODEL}:generateContent`;
+        const apiKey = ""; 
+
+        // 앱 상태 관리 변수
+        let language = 'ko'; // 'ko', 'en', 'zh'
+        let view = 'HOME'; // 'HOME', 'SELECTION', 'PERSONALIZED_INPUT', 'INTERPRETATION'
+        let category = null;
+        let selectedItem = null;
+        let contextualBook = { ko: '창세기', en: 'Genesis', zh: '创世记' };
+        let personalQuery = '';
+
+        // --- 다국어 텍스트 데이터 ---
+        const UI_TEXT = {
+            ko: {
+                APP_TITLE: '바이블 딥다이브 (Bible Deep Dive)',
+                LOADING_MESSAGE: '심층 해설을 생성 중입니다... (네 가지 실존적 질문에 초점을 맞춥니다)',
+                EXPLORE_MESSAGE: '선택된 주제에 대한 인간 존재의 심층 질문을 탐구합니다.',
+                CATEGORY_SELECTION_TITLE: (name) => `${name} 선택`,
+                CUSTOM_TITLE: '나의 질문을 성경에 적용하기',
+                CUSTOM_PROMPT_1: '1. 어떤 성경 본문의 맥락에서 해석하길 원하십니까?',
+                CUSTOM_PROMPT_2: '2. 당신의 현대적 딜레마나 질문을 입력해 주세요:',
+                CUSTOM_PLACEHOLDER: '예: 저는 직장 내 부당함 때문에 고통받고 있습니다. 제가 선택한 본문(예: 욥기)은 이 상황에서 저에게 어떤 메시지를 줄 수 있을까요?',
+                CUSTOM_BUTTON: '심층 해석 요청',
+                ERROR_NO_QUERY: '당신의 질문을 입력해 주세요.',
+                ERROR_FETCH_FAIL: '해석을 가져오는 데 실패했습니다. 다시 시도해 주세요. (네트워크 오류 또는 API 요청 시간 초과)',
+                INTERPRETATION_TITLE: (cat, item) => `${cat} > ${item}`,
+                SOURCE_TITLE: '참고 자료 (Google Search Grounding)',
+                BUTTON_BACK_SELECTION: '다른 주제 선택 화면으로 돌아가기',
+                BUTTON_BACK_PERSONALIZED: '질문 수정 화면으로 돌아가기',
+            },
+            en: {
+                APP_TITLE: 'Bible Deep Dive',
+                LOADING_MESSAGE: 'Generating deep interpretation... (Focusing on four existential questions)',
+                EXPLORE_MESSAGE: 'Explore the deep existential questions of human existence based on the selected topic.',
+                CATEGORY_SELECTION_TITLE: (name) => `Select ${name}`,
+                CUSTOM_TITLE: 'Apply My Question to the Bible',
+                CUSTOM_PROMPT_1: '1. In the context of which biblical book would you like the interpretation?',
+                CUSTOM_PROMPT_2: '2. Enter your modern dilemma or question:',
+                CUSTOM_PLACEHOLDER: 'E.g., I am suffering from injustice at work. What message can the book I chose (e.g., Job) give me in this situation?',
+                CUSTOM_BUTTON: 'Request Deep Interpretation',
+                ERROR_NO_QUERY: 'Please enter your question.',
+                ERROR_FETCH_FAIL: 'Failed to fetch interpretation. Please try again. (Network error or API timeout)',
+                INTERPRETATION_TITLE: (cat, item) => `${cat} > ${item}`,
+                SOURCE_TITLE: 'Sources (Google Search Grounding)',
+                BUTTON_BACK_SELECTION: 'Go back to category selection',
+                BUTTON_BACK_PERSONALIZED: 'Go back to edit query screen',
+            },
+            zh: {
+                APP_TITLE: '圣经深度潜水 (Bible Deep Dive)',
+                LOADING_MESSAGE: '正在生成深度解读... (聚焦于四个存在主义问题)',
+                EXPLORE_MESSAGE: '基于所选主题探索人类存在的深度存在主义问题。',
+                CATEGORY_SELECTION_TITLE: (name) => `选择 ${name}`,
+                CUSTOM_TITLE: '将我的问题应用于圣经',
+                CUSTOM_PROMPT_1: '1. 您希望在哪个圣经书卷的背景下进行解读？',
+                CUSTOM_PROMPT_2: '2. 请输入您的现代困境或问题：',
+                CUSTOM_PLACEHOLDER: '例如：我正在遭受工作中的不公正待遇。我选择的经文（例如：约伯记）在这种情况下能给我什么信息？',
+                CUSTOM_BUTTON: '请求深度解读',
+                ERROR_NO_QUERY: '请输入您的问题。',
+                ERROR_FETCH_FAIL: '获取解读失败。请重试。（网络错误或 API 超时）',
+                INTERPRETATION_TITLE: (cat, item) => `${cat} > ${item}`,
+                SOURCE_TITLE: '参考资料 (Google Search Grounding)',
+                BUTTON_BACK_SELECTION: '返回主题选择画面',
+                BUTTON_BACK_PERSONALIZED: '返回修改问题画面',
+            },
+        };
+
+        const CATEGORIES = [
+            { id: 'BOOK', name_ko: '권별 해석', name_en: 'Book Interpretation', name_zh: '书卷解读', icon: '📖' },
+            { id: 'ERA', name_ko: '시대별 해석', name_en: 'Era Interpretation', name_zh: '时代解读', icon: '⏳' },
+            { id: 'PERSON', name_ko: '인물별 해석', name_en: 'Person Interpretation', name_zh: '人物解读', icon: '👤' },
+            { id: 'STORY', name_ko: '스토리/주제별 해석', name_en: 'Story/Theme Interpretation', name_zh: '故事/主题解读', icon: '📜' },
+            { id: 'THEOLOGY', name_ko: '교리 심층 해설', name_en: 'Theology Deep Dive', name_zh: '神学深度解读', icon: '🏛️' },
+            { id: 'GEOGRAPHY', name_ko: '성경 지리/역사 배경', name_en: 'Geography/History Background', name_zh: '地理/历史背景', icon: '🗺️' },
+            { id: 'TYPOLOGY', name_ko: '비교 유형론적 관점', name_en: 'Comparative Typology', name_zh: '比较类型学', icon: '🔗' },
+            { id: 'PERSONALIZED', name_ko: '나의 질문 적용', name_en: 'Apply My Question', name_zh: '应用我的问题', icon: '💡' },
+        ];
+        
+        const SELECTION_DATA = {
+            BOOK: [
+                { ko: '창세기', en: 'Genesis', zh: '创世记' }, { ko: '출애굽기', en: 'Exodus', zh: '出埃及记' }, { ko: '레위기', en: 'Leviticus', zh: '利未记' }, 
+                { ko: '민수기', en: 'Numbers', zh: '民数记' }, { ko: '신명기', en: 'Deuteronomy', zh: '申命记' }, { ko: '여호수아', en: 'Joshua', zh: '约书亚记' }, 
+                { ko: '사사기', en: 'Judges', zh: '士师记' }, { ko: '룻기', en: 'Ruth', zh: '路得记' }, { ko: '사무엘상', en: '1 Samuel', zh: '撒母耳记上' }, 
+                { ko: '사무엘하', en: '2 Samuel', zh: '撒母耳记下' }, { ko: '열왕기상', en: '1 Kings', zh: '列王纪上' }, { ko: '열왕기하', en: '2 Kings', zh: '列王纪下' }, 
+                { ko: '역대상', en: '1 Chronicles', zh: '历代志上' }, { ko: '역대하', en: '2 Chronicles', zh: '历代志下' }, { ko: '에스라', en: 'Ezra', zh: '以斯拉记' },
+                { ko: '느헤미야', en: 'Nehemiah', zh: '尼希米记' }, { ko: '에스더', en: 'Esther', zh: '以斯帖记' }, { ko: '욥기', en: 'Job', zh: '约伯记' }, 
+                { ko: '시편', en: 'Psalms', zh: '诗篇' }, { ko: '잠언', en: 'Proverbs', zh: '箴言' }, { ko: '전도서', en: 'Ecclesiastes', zh: '传道书' },
+                { ko: '아가', en: 'Song of Solomon', zh: '雅歌' }, { ko: '이사야', en: 'Isaiah', zh: '以赛亚书' }, { ko: '예레미야', en: 'Jeremiah', zh: '耶利米书' }, 
+                { ko: '예레미야애가', en: 'Lamentations', zh: '耶利米哀歌' }, { ko: '에스겔', en: 'Ezekiel', zh: '以西结书' }, { ko: '다니엘', en: 'Daniel', zh: '但以理书' }, 
+                { ko: '호세아', en: 'Hosea', zh: '何西阿书' }, { ko: '요엘', en: 'Joel', zh: '约珥书' }, { ko: '아모스', en: 'Amos', zh: '阿摩司书' },
+                { ko: '오바댜', en: 'Obadiah', zh: '俄巴底亚书' }, { ko: '요나', en: 'Jonah', zh: '约拿书' }, { ko: '미가', en: 'Micah', zh: '弥迦书' }, 
+                { ko: '나훔', en: 'Nahum', zh: '那鸿书' }, { ko: '하박국', en: 'Habakkuk', zh: '哈巴谷书' }, { ko: '스바냐', en: 'Zephaniah', zh: '西番雅书' },
+                { ko: '학개', en: 'Haggai', zh: '哈该书' }, { ko: '스가랴', en: 'Zechariah', zh: '撒迦利亚书' }, { ko: '말라기', en: 'Malachi', zh: '玛拉基书' },
+                { ko: '마태복음', en: 'Matthew', zh: '马太福音' }, { ko: '마가복음', en: 'Mark', zh: '马可福音' }, { ko: '누가복음', en: 'Luke', zh: '路加福音' }, 
+                { ko: '요한복음', en: 'John', zh: '约翰福音' }, { ko: '사도행전', en: 'Acts', zh: '使徒行传' }, { ko: '로마서', en: 'Romans', zh: '罗马书' }, 
+                { ko: '고린도전서', en: '1 Corinthians', zh: '哥林多前书' }, { ko: '고린도후서', en: '2 Corinthians', zh: '哥林多后书' }, { ko: '갈라디아서', en: 'Galatians', zh: '加拉太书' }, 
+                { ko: '에베소서', en: 'Ephesians', zh: '以弗所书' }, { ko: '빌립보서', en: 'Philippians', zh: '腓立比书' }, { ko: '골로새서', en: 'Colossians', zh: '歌罗西书' }, 
+                { ko: '데살로니가전서', en: '1 Thessalonians', zh: '帖撒罗尼迦前书' }, { ko: '데살로니가후서', en: '2 Thessalonians', zh: '帖撒罗尼迦后书' }, { ko: '디모데전서', en: '1 Timothy', zh: '提摩太前书' },
+                { ko: '디모데후서', en: '2 Timothy', zh: '提摩太后书' }, { ko: '디도서', en: 'Titus', zh: '提多书' }, { ko: '빌레몬서', en: 'Philemon', zh: '腓利门书' }, 
+                { ko: '히브리서', en: 'Hebrews', zh: '希伯来书' }, { ko: '야고보서', en: 'James', zh: '雅各书' }, { ko: '베드로전서', en: '1 Peter', zh: '彼得前书' }, 
+                { ko: '베드로후서', en: '2 Peter', zh: '彼得后书' }, { ko: '요한일서', en: '1 John', zh: '约翰一书' }, { ko: '요한이서', en: '2 John', zh: '约翰二书' }, 
+                { ko: '요한삼서', en: '3 John', zh: '约翰三书' }, { ko: '유다서', en: 'Jude', zh: '犹大书' }, { ko: '요한계시록', en: 'Revelation', zh: '启示录' },
+            ],
+            ERA: [
+                { ko: '1. 창조 시대', en: '1. Creation Era', zh: '1. 创造时代' }, { ko: '2. 족장 시대', en: '2. Patriarchs Era', zh: '2. 列祖时代' }, 
+                { ko: '3. 출애굽 시대', en: '3. Exodus Era', zh: '3. 出埃及时代' }, { ko: '4. 광야 시대', en: '4. Wilderness Era', zh: '4. 旷野时代' },
+                { ko: '5. 정복 시대', en: '5. Conquest Era', zh: '5. 征服时代' }, { ko: '6. 사사 시대', en: '6. Judges Era', zh: '6. 士师时代' }, 
+                { ko: '7. 통일 왕국 시대', en: '7. United Kingdom Era', zh: '7. 联合王国时代' }, { ko: '8. 분열 왕국 시대', en: '8. Divided Kingdom Era', zh: '8. 分裂王国时代' },
+                { ko: '9. 포로 시대', en: '9. Exile Era', zh: '9. 被掳时代' }, { ko: '10. 귀환 시대', en: '10. Return Era', zh: '10. 归回时代' }, 
+                { ko: '11. 중간기/침묵 시대', en: '11. Intertestamental Period', zh: '11. 两约中间期/沉默时代' }, { ko: '12. 신약 시대', en: '12. New Testament/Church Age', zh: '12. 新约时代/教会时代' },
+            ],
+            PERSON: [
+                { ko: '아담과 하와', en: 'Adam & Eve', zh: '亚当与夏娃' }, { ko: '노아', en: 'Noah', zh: '挪亚' }, { ko: '아브라함', en: 'Abraham', zh: '亚伯拉罕' }, 
+                { ko: '사라', en: 'Sarah', zh: '撒拉' }, { ko: '이삭', en: 'Isaac', zh: '以撒' }, { ko: '리브가', en: 'Rebekah', zh: '利百加' },
+                { ko: '야곱', en: 'Jacob', zh: '雅各' }, { ko: '라헬', en: 'Rachel', zh: '拉结' }, { ko: '요셉', en: 'Joseph', zh: '约瑟' }, 
+                { ko: '모세', en: 'Moses', zh: '摩西' }, { ko: '아론', en: 'Aaron', zh: '亚伦' }, { ko: '미리암', en: 'Miriam', zh: '米利暗' },
+                { ko: '여호수아', en: 'Joshua', zh: '约书亚' }, { ko: '라합', en: 'Rahab', zh: '喇合' }, { ko: '드보라', en: 'Deborah', zh: '底波拉' }, 
+                { ko: '기드온', en: 'Gideon', zh: '基甸' }, { ko: '삼손', en: 'Samson', zh: '参孙' }, { ko: '룻', en: 'Ruth', zh: '路得' }, { ko: '나오미', en: 'Naomi', zh: '拿俄米' },
+                { ko: '엘리', en: 'Eli', zh: '以利' }, { ko: '사무엘', en: 'Samuel', zh: '撒母耳' }, { ko: '사울', en: 'Saul', zh: '扫罗' }, 
+                { ko: '요나단', en: 'Jonathan', zh: '约拿单' }, { ko: '다윗', en: 'David', zh: '大卫' }, { ko: '밧세바', en: 'Bathsheba', zh: '拔示巴' }, { ko: '솔로몬', en: 'Solomon', zh: '所罗门' },
+                { ko: '엘리야', en: 'Elijah', zh: '以利亚' }, { ko: '엘리사', en: 'Elisha', zh: '以利沙' }, { ko: '나아만', en: 'Naaman', zh: '乃缦' }, { ko: '히스기야', en: 'Hezekiah', zh: '希西家' },
+                { ko: '에스더', en: 'Esther', zh: '以斯帖' }, { ko: '모르드개', en: 'Mordecai', zh: '末底改' }, { ko: '느헤미야', en: 'Nehemiah', zh: '尼希米' }, { ko: '다니엘', en: 'Daniel', zh: '但以理' },
+                { ko: '세례 요한', en: 'John the Baptist', zh: '施洗约翰' }, { ko: '마리아 (예수님의 어머니)', en: 'Mary (Mother of Jesus)', zh: '马利亚 (耶稣的母亲)' }, 
+                { ko: '예수 그리스도', en: 'Jesus Christ', zh: '耶稣基督' }, { ko: '베드로', en: 'Peter', zh: '彼得' }, { ko: '요한', en: 'John', zh: '约翰' },
+                { ko: '마리아 막달레나', en: 'Mary Magdalene', zh: '抹大拉的马利亚' }, { ko: '사마리아 여인', en: 'Samaritan Woman', zh: '撒玛利亚妇人' }, 
+                { ko: '바울', en: 'Paul', zh: '保罗' }, { ko: '바나바', en: 'Barnabas', zh: '巴拿巴' },
+                { ko: '디모데', en: 'Timothy', zh: '提摩太' }, { ko: '루디아', en: 'Lydia', zh: '吕底亚' }, 
+                { ko: '아굴라와 브리스길라', en: 'Aquila & Priscilla', zh: '亚居拉与百基拉' }, { ko: '요한 (요한계시록의 저자)', en: 'John (Author of Revelation)', zh: '约翰 (启示录作者)' },
+            ],
+            STORY: [
+                { ko: '창조와 인간의 타락', en: 'Creation and Fall of Humanity', zh: '创造与人类的堕落' }, { ko: '가인과 아벨', en: 'Cain and Abel', zh: '该隐与亚伯' }, 
+                { ko: '노아의 홍수와 언약', en: 'Noah\'s Flood and Covenant', zh: '挪亚的洪水与盟约' }, { ko: '바벨탑 사건', en: 'The Tower of Babel', zh: '巴别塔事件' }, 
+                { ko: '아브라함의 부르심과 믿음', en: 'Abraham\'s Call and Faith', zh: '亚伯拉罕的呼召与信心' }, { ko: '이삭 헌신', en: 'Sacrifice of Isaac', zh: '以撒的献祭' },
+                { ko: '야곱의 씨름과 이스라엘', en: 'Jacob\'s Wrestling and Israel', zh: '雅各的摔跤与以色列' }, { ko: '요셉의 꿈과 구원', en: 'Joseph\'s Dreams and Salvation', zh: '约瑟的梦与拯救' },
+                { ko: '출애굽 사건과 해방', en: 'The Exodus and Liberation', zh: '出埃及事件与解放' }, { ko: '시내 산 언약과 율법', en: 'The Sinai Covenant and Law', zh: '西奈山之约与律法' }, 
+                { ko: '광야 40년의 의미', en: 'The Meaning of 40 Years in the Wilderness', zh: '旷野四十年之意义' }, { ko: '여리고 정복', en: 'Conquest of Jericho', zh: '耶利哥的征服' }, 
+                { ko: '사사 시대의 반복되는 죄와 구원', en: 'The Cycle of Sin and Salvation in the Judges Era', zh: '士师时代反复的罪与救赎' }, { ko: '룻과 보아스 이야기', en: 'The Story of Ruth and Boaz', zh: '路得与波阿斯的故事' },
+                { ko: '사무엘의 소명', en: 'Samuel\'s Calling', zh: '撒母耳的呼召' }, { ko: '다윗과 골리앗', en: 'David and Goliath', zh: '大卫与歌利亚' }, 
+                { ko: '다윗 언약과 왕국', en: 'The Davidic Covenant and Kingdom', zh: '大卫之约与王国' }, { ko: '솔로몬의 지혜와 몰락', en: 'Solomon\'s Wisdom and Fall', zh: '所罗门的智慧与堕落' }, 
+                { ko: '엘리야와 바알 선지자 대결', en: 'Elijah vs. Prophets of Baal', zh: '以利亚与巴力先知的对抗' },
+                { ko: '바벨론 포로 생활의 의미', en: 'The Meaning of the Babylonian Exile', zh: '巴比伦被掳生活之意义' }, { ko: '다니엘의 세 친구와 믿음', en: 'Daniel\'s Three Friends and Faith', zh: '但以理的三个朋友与信心' }, 
+                { ko: '에스더의 구원', en: 'Esther\'s Salvation', zh: '以斯帖的拯救' }, { ko: '느헤미야의 성벽 재건', en: 'Nehemiah Rebuilding the Wall', zh: '尼希米重建城墙' },
+                { ko: '예수의 탄생과 성육신', en: 'The Birth and Incarnation of Jesus', zh: '耶稣的诞生与道成肉身' }, { ko: '산상수훈', en: 'The Sermon on the Mount', zh: '登山宝训' }, 
+                { ko: '예수의 기적과 권위', en: 'Jesus\' Miracles and Authority', zh: '耶稣的神迹与权柄' }, { ko: '십자가와 부활', en: 'The Cross and Resurrection', zh: '十字架与复活' }, 
+                { ko: '성령 강림과 교회의 시작', en: 'Pentecost and the Start of the Church', zh: '圣灵降临与教会的开始' },
+                { ko: '바울의 회심과 선교', en: 'Paul\'s Conversion and Mission', zh: '保罗的归信与宣教' }, { ko: '믿음으로 말미암는 구원', en: 'Salvation by Faith', zh: '因信称义的救恩' }, 
+                { ko: '최후의 심판과 새 하늘과 새 땅', en: 'The Final Judgment and New Creation', zh: '末日审判与新天新地' },
+            ],
+            THEOLOGY: [
+                { ko: '삼위일체론', en: 'The Trinity', zh: '三位一体论' }, { ko: '성령론', en: 'Pneumatology', zh: '圣灵论' }, { ko: '신론', en: 'Theology Proper', zh: '神论' },
+                { ko: '기독론', en: 'Christology', zh: '基督论' }, { ko: '인간론', en: 'Anthropology', zh: '人论' }, { ko: '구원론', en: 'Soteriology', zh: '救恩论' }, 
+                { ko: '교회론', en: 'Ecclesiology', zh: '教会论' }, { ko: '종말론', en: 'Eschatology', zh: '末世论' }, { ko: '언약 신학', en: 'Covenant Theology', zh: '圣约神学' },
+            ],
+            GEOGRAPHY: [
+                { ko: '메소포타미아 문명과 갈대아 우르', en: 'Mesopotamian Civilization and Ur of the Chaldeans', zh: '美索不达米亚文明与迦勒底的吾珥' }, 
+                { ko: '애굽(이집트)과 출애굽 경로', en: 'Egypt and the Exodus Route', zh: '埃及与出埃及路线' }, 
+                { ko: '시내 광야와 40년 여정의 의미', en: 'The Sinai Wilderness and the Meaning of the 40-Year Journey', zh: '西奈旷野与四十年旅程的意义' },
+                { ko: '가나안 땅의 지리적 특징과 중요성', en: 'Geographical Features and Importance of the Land of Canaan', zh: '迦南地的地理特征与重要性' }, 
+                { ko: '갈릴리 바다와 예수님의 사역', en: 'The Sea of Galilee and Jesus\' Ministry', zh: '加利利海与耶稣的事工' }, 
+                { ko: '예루살렘 성전의 역사적 배경', en: 'Historical Background of the Jerusalem Temple', zh: '耶路撒冷圣殿的历史背景' },
+                { ko: '로마 제국의 팍스 로마나 시대', en: 'Pax Romana Era of the Roman Empire', zh: '罗马帝国的罗马和平时代' }, 
+                { ko: '바벨론 포로기 배경과 페르시아 제국', en: 'The Context of the Babylonian Exile and the Persian Empire', zh: '巴比伦被掳背景与波斯帝国' }, 
+                { ko: '헬라 문화 (헬레니즘)의 영향', en: 'The Influence of Greek Culture (Hellenism)', zh: '希腊文化（希腊化）的影响' },
+            ],
+            TYPOLOGY: [
+                { ko: '멜기세덱의 대제사장직 예표', en: 'Melchizedek\'s Prefiguration of the High Priesthood', zh: '麦基洗德预表大祭司职任' }, 
+                { ko: '놋뱀과 십자가의 예표', en: 'The Bronze Serpent and the Prefiguration of the Cross', zh: '铜蛇与十字架的预表' }, 
+                { ko: '유월절 어린양과 예수 그리스도', en: 'The Passover Lamb and Jesus Christ', zh: '逾越节的羔羊与耶稣基督' },
+                { ko: '아담과 마지막 아담 (예수)', en: 'Adam and the Last Adam (Jesus)', zh: '亚当与末后的亚当（耶稣）' }, 
+                { ko: '노아의 방주와 교회', en: 'Noah\'s Ark and the Church', zh: '挪亚方舟与教会' }, 
+                { ko: '홍해의 기적과 세례', en: 'The Miracle of the Red Sea and Baptism', zh: '红海神迹与洗礼' },
+                { ko: '만나와 생명의 떡 (예수)', en: 'Manna and the Bread of Life (Jesus)', zh: '吗哪与生命的粮（耶稣）' }, 
+                { ko: '성막과 지성소의 의미', en: 'The Meaning of the Tabernacle and the Holy of Holies', zh: '会幕与至圣所的意义' },
+            ],
+        };
+
+        const getUIText = (key, lang = language, ...args) => {
+            const text = UI_TEXT[lang] ? UI_TEXT[lang][key] : UI_TEXT['ko'][key];
+            return typeof text === 'function' ? text(...args) : text;
+        };
+
+        const getLocalizedItemName = (item, lang = language) => {
+            return item[lang] || item['en'];
+        };
+
+        const getLLMQueryTopic = (item) => {
+            return item.en;
+        };
+        
+        // --- 2. 렌더링 및 UI 업데이트 함수 ---
+
+        const $ = (id) => document.getElementById(id);
+        const $content = $('content-area');
+        const $backButton = $('back-button');
+        const $footerButtonArea = $('footer-button-area');
+        const $footerBackButton = $('footer-back-button');
+        const $langToggle = $('lang-toggle');
+
+        function updateUI() {
+            // 1. 헤더 언어 토글 업데이트
+            $langToggle.textContent = language.toUpperCase();
+            
+            // 2. 뒤로가기 및 푸터 버튼 가시성 업데이트
+            if (view === 'HOME') {
+                $backButton.classList.add('hidden');
+                $footerButtonArea.classList.add('hidden');
+            } else if (view === 'INTERPRETATION') {
+                $backButton.classList.remove('hidden');
+                $footerButtonArea.classList.remove('hidden');
+                $footerBackButton.textContent = category === 'PERSONALIZED' 
+                    ? getUIText('BUTTON_BACK_PERSONALIZED', language)
+                    : getUIText('BUTTON_BACK_SELECTION', language);
+            } else { // SELECTION, PERSONALIZED_INPUT
+                $backButton.classList.remove('hidden');
+                $footerButtonArea.classList.add('hidden');
+            }
+
+            // 3. 뷰에 맞는 콘텐츠 렌더링
+            renderContent();
+        }
+        
+        function handleBackButtonClick() {
+            if (view === 'INTERPRETATION') {
+                // 해석 화면에서 뒤로가기 -> 개인 질문 또는 선택 화면으로
+                if (category === 'PERSONALIZED') {
+                    view = 'PERSONALIZED_INPUT';
+                } else {
+                    view = 'SELECTION';
+                }
+            } else if (view === 'SELECTION' || view === 'PERSONALIZED_INPUT') {
+                // 선택 또는 질문 입력 화면에서 뒤로가기 -> 홈 화면으로
+                view = 'HOME';
+                category = null;
+            }
+            updateUI();
+        }
+
+        // --- 3. 핵심 기능: LLM API 호출 함수 (Exponential Backoff 포함) ---
+        
+        async function fetchInterpretation(query) {
+            view = 'INTERPRETATION';
+            $content.innerHTML = `
+                <div class="flex flex-col items-center justify-center p-12 bg-gray-700 rounded-xl m-4 shadow-lg">
+                    <div class="w-10 h-10 border-4 border-t-4 border-indigo-500 border-opacity-50 border-t-white rounded-full animate-spin"></div>
+                    <span class="mt-4 text-white font-semibold text-center">${getUIText('LOADING_MESSAGE', language)}</span>
+                </div>
+            `;
+            updateUI();
+            
+            let languageInstruction;
+            let userQuery;
+            
+            // 사용자 쿼리 및 시스템 프롬프트의 언어 설정
+            if (language === 'ko') {
+                languageInstruction = '해석은 한국어로 작성해 주십시오. (Output Language: Korean)';
+                userQuery = `다음 주제에 대해 앞서 정의된 네 가지 실존적 질문에 초점을 맞춘 심층 해석을 제공하십시오: "${query}"`;
+            } else if (language === 'en') {
+                languageInstruction = 'The interpretation must be written in English. (Output Language: English)';
+                userQuery = `Provide a deep interpretation focused on the four existential questions defined above for the following topic: "${query}"`;
+            } else { // lang === 'zh'
+                languageInstruction = '请用中文（简体）撰写解读。 (Output Language: Simplified Chinese)';
+                userQuery = `请针对以下主题，提供一个聚焦于前面定义的四个存在主义问题的深度解读: "${query}"`;
+            }
+
+            const systemPrompt = `
+                ${language === 'ko' ? '당신은 세계적인 수준의 학문적 성경 해석가입니다. 사용자가 요청한 주제에 대해 깊이 있고 포괄적인 해설을 제공하십시오.' : language === 'en' ? 'You are a world-class academic biblical interpreter. Provide a deep and comprehensive commentary on the topic requested by the user.' : '您是世界级的学术圣经诠释者。请针对用户请求的主题提供深入而全面的解读。'}
+                
+                **${language === 'ko' ? '특히 다음의 실존적, 인간론적 질문들에 초점을 맞춰 해석을 구성해야 합니다. 각 질문에 대한 답변을 명확하게 마크다운 섹션으로 구분하여 제시하십시오:' : language === 'en' ? 'Specifically, structure the interpretation by focusing on the following existential and anthropological questions. Clearly separate the answers to each question using markdown sections:' : '特别是，请聚焦于以下存在主义和人类学问题来组织解读。请使用 Markdown 明确划分每个问题的答案部分：'}**
+                
+                ### ${language === 'ko' ? '1. 인간 존재의 목적과 의미' : language === 'en' ? '1. Purpose and Meaning of Human Existence' : '1. 人类存在的目的与意义'}
+                ${language === 'ko' ? '이 주제가 인간의 본질과 소명을 어떻게 다루는가?' : language === 'en' ? 'How does this topic address the essence and calling of humanity?' : '这个主题如何处理人性的本质和使命？'}
+                
+                ### ${language === 'ko' ? '2. 고통과 악의 문제' : language === 'en' ? '2. The Problem of Suffering and Evil' : '2. 苦难与邪恶的问题'}
+                ${language === 'ko' ? '이 주제 속에서 고난과 죄악은 어떻게 설명되고 해결되는가?' : language === 'en' ? 'How are suffering and evil explained and resolved within this topic?' : '在这个主题中，苦难和罪恶是如何被解释和解决的？'}
+                
+                ### ${language === 'ko' ? '3. 도덕과 윤리' : language === 'en' ? '3. Morality and Ethics' : '3. 道德与伦理'}
+                ${language === 'ko' ? '이 주제가 인간의 책임, 정의, 그리고 선악의 기준에 대해 어떤 통찰을 제공하는가?' : language === 'en' ? 'What insight does this topic offer regarding human responsibility, justice, and the standard of good and evil?' : '这个主题在人类责任、正义以及善恶标准方面提供了哪些见解？'}
+                
+                ### ${language === 'ko' ? '4. 궁극적 운명과 희망' : language === 'en' ? '4. Ultimate Destiny and Hope' : '4. 终极命运与希望'}
+                ${language === 'ko' ? '이 주제가 삶 이후, 또는 종말론적인 관점에서 인간에게 제시하는 희망과 결말은 무엇인가?' : language === 'en' ? 'What hope and conclusion does this topic present to humanity regarding life after death or from an eschatological perspective?' : '这个主题从生命之后或末世论的角度为人类呈现了怎样的希望和结局？'}
+                
+                ${language === 'ko' ? '해설은 학술적이면서도 명료하고, 성경 본문의 문맥에 충실해야 합니다.' : language === 'en' ? 'The commentary must be academic yet clear, and faithful to the context of the biblical text.' : '解读应具有学术性，同时清晰明了，并忠实于圣经文本的上下文。'}
+                ${language === 'ko' ? '결과물은 오직 마크다운으로 된 해설 텍스트로만 구성되어야 하며, 불필요한 서론이나 결론 문구 없이 요청된 해석을 바로 시작해야 합니다. Markdown을 사용하여 헤더, 목록, 굵은 글씨 등을 명확하게 구분하십시오.' : language === 'en' ? 'The output must consist only of the interpretation text in markdown, starting immediately without unnecessary introductory or concluding remarks. Use Markdown to clearly delineate headers, lists, and bold text.' : '结果应仅包含 Markdown 格式的解读文本，无需不必要的引言或结论，直接开始请求的解读内容。请使用 Markdown 明确划分标题、列表和粗体文本。'}
+                
+                ---
+                ${languageInstruction}
+                ---
+            `;
+
+            const payload = {
+                contents: [{ parts: [{ text: userQuery }] }],
+                tools: [{ "google_search": {} }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+            };
+
+            let interpretationText = getUIText('ERROR_FETCH_FAIL');
+            let sources = [];
+            
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const response = await fetch(API_URL, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    const candidate = result.candidates?.[0];
+
+                    if (candidate && candidate.content?.parts?.[0]?.text) {
+                        interpretationText = candidate.content.parts[0].text;
+                        const groundingMetadata = candidate.groundingMetadata;
+                        
+                        if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                            sources = groundingMetadata.groundingAttributions
+                                .map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }))
+                                .filter(source => source.uri && source.title);
+                        }
+                        break; // 성공 시 루프 탈출
+                    } else {
+                        throw new Error("API 응답에서 해석 텍스트를 찾을 수 없습니다.");
+                    }
+
+                } catch (err) {
+                    console.error(`API call failed (attempt ${attempt + 1}):`, err);
+                    if (attempt < 2) {
+                        // Exponential Backoff: 1초, 2초 지연 후 재시도
+                        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+                    }
+                }
+            }
+            
+            renderInterpretation(interpretationText, sources);
+        }
+
+        // --- 4. 렌더링 함수 구현 (View 별) ---
+        
+        function renderContent() {
+            if (view === 'HOME') {
+                renderHome();
+            } else if (view === 'SELECTION') {
+                renderSelection();
+            } else if (view === 'PERSONALIZED_INPUT') {
+                renderPersonalizedInput();
+            }
+            // INTERPRETATION 뷰는 fetchInterpretation에서 직접 렌더링을 처리합니다.
+        }
+        
+        function renderHome() {
+            // 카테고리 선택 화면 (HOME) 렌더링
+            $content.innerHTML = `
+                <div class="grid grid-cols-2 gap-4 p-4">
+                    ${CATEGORIES.map(cat => `
+                        <button
+                            class="category-btn flex flex-col items-center justify-center p-4 bg-gray-700 hover:bg-gray-600 rounded-xl shadow-lg transition duration-200 transform hover:scale-[1.02] text-white min-h-[100px] active:ring-4 active:ring-indigo-500"
+                            data-category="${cat.id}"
+                        >
+                            <span class="text-3xl mb-1">${cat.icon}</span>
+                            <span class="text-xs font-semibold text-center leading-tight">
+                                ${cat[`name_${language}`]}
+                            </span>
+                        </button>
+                    `).join('')}
+                    <div class="col-span-2 mt-4 text-center text-gray-400 text-sm">
+                        <p>${getUIText('EXPLORE_MESSAGE', language)}</p>
+                    </div>
+                </div>
+            `;
+            
+            document.querySelectorAll('.category-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    category = this.getAttribute('data-category');
+                    if (category === 'PERSONALIZED') {
+                        view = 'PERSONALIZED_INPUT';
+                    } else {
+                        view = 'SELECTION';
+                    }
+                    updateUI();
+                });
+            });
+        }
+
+        function renderSelection() {
+            // 주제 세부 항목 선택 화면 (SELECTION) 렌더링
+            const currentCategoryName = CATEGORIES.find(c => c.id === category)?.[`name_${language}`] || getUIText('CATEGORY_SELECTION_TITLE', language, 'Topic');
+            const data = SELECTION_DATA[category] || [];
+
+            $content.innerHTML = `
+                <div class="p-4">
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b border-gray-600 pb-2">
+                        ${getUIText('CATEGORY_SELECTION_TITLE', language, currentCategoryName)}
+                    </h2>
+                    <div id="item-list" class="space-y-3 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+                        ${data.map((item, index) => `
+                            <button
+                                class="item-select-btn w-full text-left p-4 bg-gray-700 hover:bg-indigo-600 text-white rounded-lg transition duration-200 shadow-md text-sm active:ring-4 active:ring-indigo-500"
+                                data-item-index="${index}"
+                            >
+                                ${getLocalizedItemName(item)}
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+
+            document.querySelectorAll('.item-select-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const index = parseInt(this.getAttribute('data-item-index'));
+                    const itemObject = SELECTION_DATA[category][index];
+                    
+                    selectedItem = getLocalizedItemName(itemObject);
+                    const currentCategory = CATEGORIES.find(c => c.id === category);
+                    const categoryName = currentCategory.en;
+                    const itemQuery = getLLMQueryTopic(itemObject);
+                    const fullQuery = `${categoryName} - ${itemQuery}`;
+                    
+                    fetchInterpretation(fullQuery);
+                });
+            });
+        }
+        
+        function renderPersonalizedInput() {
+            // 개인 질문 입력 화면 (PERSONALIZED_INPUT) 렌더링
+            const bookOptions = SELECTION_DATA.BOOK; 
+
+            $content.innerHTML = `
+                <div class="p-4">
+                    <h2 class="text-2xl font-bold mb-4 text-white border-b border-indigo-500 pb-2">
+                        ${getUIText('CUSTOM_TITLE', language)}
+                    </h2>
+                    <div class="space-y-6">
+                        
+                        <div>
+                            <label for="contextBook" class="block text-gray-300 font-semibold mb-2 text-base">
+                                ${getUIText('CUSTOM_PROMPT_1', language)}
+                            </label>
+                            <select 
+                                id="contextBook"
+                                class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white appearance-none focus:ring-2 focus:ring-indigo-500"
+                            >
+                                ${bookOptions.map(book => `
+                                    <option value="${book.en}" ${book.en === contextualBook.en ? 'selected' : ''}>
+                                        ${getLocalizedItemName(book)}
+                                    </option>
+                                `).join('')}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label for="personalDilemma" class="block text-gray-300 font-semibold mb-2 text-base">
+                                ${getUIText('CUSTOM_PROMPT_2', language)}
+                            </label>
+                            <textarea
+                                id="personalDilemma"
+                                class="w-full h-40 p-4 bg-gray-700 border border-gray-600 rounded-lg text-white resize-none placeholder-gray-400 focus:ring-2 focus:ring-indigo-500"
+                                placeholder="${getUIText('CUSTOM_PLACEHOLDER', language)}"
+                            >${personalQuery}</textarea>
+                        </div>
+                        
+                        <button
+                            id="generate-personal-btn"
+                            class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition shadow-md active:ring-4 active:ring-indigo-500"
+                        >
+                            ${getUIText('CUSTOM_BUTTON', language)}
+                        </button>
+                        <p id="error-message" class="text-red-400 text-center mt-3 hidden"></p>
+                    </div>
+                </div>
+            `;
+            
+            // 이벤트 리스너 재부착
+            $('contextBook').addEventListener('change', function() {
+                const selectedEnName = this.value;
+                // 현재 선택된 contextualBook 객체를 언어와 관계없이 업데이트
+                contextualBook = bookOptions.find(book => book.en === selectedEnName);
+            });
+            
+            $('personalDilemma').addEventListener('input', function() {
+                personalQuery = this.value;
+                $('error-message').classList.add('hidden');
+            });
+
+            $('generate-personal-btn').addEventListener('click', function() {
+                if (!personalQuery.trim()) {
+                    const errorMessage = $('error-message');
+                    errorMessage.textContent = getUIText('ERROR_NO_QUERY', language);
+                    errorMessage.classList.remove('hidden');
+                    return;
+                }
+                
+                const langContext = language === 'ko' ? '맥락' : language === 'en' ? 'context' : '背景';
+                const bookDisplayName = getLocalizedItemName(contextualBook);
+                const bookQueryName = getLLMQueryTopic(contextualBook);
+                
+                let fullQuery;
+                // LLM에 전달할 최종 쿼리 구성
+                if (language === 'ko') {
+                    fullQuery = `현대적 딜레마: "${personalQuery}"을/를 성경의 맥락: "${bookQueryName}"에 비추어 해석해 주십시오.`;
+                } else if (language === 'en') {
+                    fullQuery = `Modern dilemma: "${personalQuery}". Please interpret this in light of the biblical context: "${bookQueryName}".`;
+                } else {
+                    fullQuery = `现代困境: "${personalQuery}"。请根据圣经背景: "${bookQueryName}" 进行解读。`;
+                }
+                
+                selectedItem = `${CATEGORIES.find(c => c.id === 'PERSONALIZED')[`name_${language}`]} (${bookDisplayName} ${langContext})`;
+                fetchInterpretation(fullQuery);
+            });
+        }
+        
+        function renderInterpretation(text, sources) {
+            // 해석 결과 화면 (INTERPRETATION) 렌더링
+            const currentCategory = CATEGORIES.find(c => c.id === category)?.[`name_${language}`];
+            const title = getUIText('INTERPRETATION_TITLE', language, currentCategory, selectedItem);
+            
+            let sourceHtml = '';
+            if (sources && sources.length > 0) {
+                // 중복 제거 및 유효한 소스 필터링 (최대 3개)
+                const uniqueSources = Array.from(new Map(sources.map(item => [item.uri, item])).values())
+                    .filter(source => source.uri && source.title)
+                    .slice(0, 3);
+                
+                if (uniqueSources.length > 0) {
+                    sourceHtml = `
+                        <div class="mt-8 pt-4 border-t border-gray-700">
+                            <h3 class="text-lg font-semibold text-gray-400 mb-2">${getUIText('SOURCE_TITLE', language)}</h3>
+                            <ul class="list-disc list-inside space-y-1">
+                                ${uniqueSources.map(source => `
+                                    <li class="text-sm text-blue-400 hover:text-blue-300">
+                                        <a href="${source.uri}" target="_blank" rel="noopener noreferrer">${source.title}</a>
+                                    </li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+            }
+            
+            // 마크다운 텍스트를 HTML로 변환하는 간단한 함수 (줄바꿈만 처리)
+            const formatText = (text) => {
+                // LLM이 마크다운 헤더를 사용하도록 요청했으므로, 기본 줄바꿈은 <br>로 유지하고 마크다운 변환은 CSS로 스타일링만 합니다.
+                return text.replace(/\n/g, '<br>');
+            };
+            
+            $content.innerHTML = `
+                <div class="p-4">
+                    <h2 class="text-2xl font-bold mb-4 text-white text-center">
+                        ${title}
+                    </h2>
+                    <div class="bg-gray-700 p-6 rounded-xl shadow-lg min-h-[300px] max-h-[70vh] overflow-y-auto custom-scrollbar">
+                        <div class="text-gray-200 whitespace-pre-wrap leading-relaxed markdown-output">
+                            ${formatText(text)}
+                            ${sourceHtml}
+                        </div>
+                    </div>
+                </div>
+            `;
+            updateUI(); // 푸터 버튼을 다시 표시하기 위해
+        }
+
+
+        // --- 5. 이벤트 리스너 초기화 ---
+        
+        // 상단/하단 뒤로가기 버튼에 동일한 핸들러 연결
+        $backButton.addEventListener('click', handleBackButtonClick);
+        $footerBackButton.addEventListener('click', handleBackButtonClick);
+
+        // 언어 토글 기능
+        $langToggle.addEventListener('click', function() {
+            // 언어 순환: ko -> en -> zh -> ko
+            language = language === 'ko' ? 'en' : language === 'en' ? 'zh' : 'ko';
+            // 언어 변경 시 홈 화면으로 리셋
+            view = 'HOME';
+            category = null;
+            contextualBook = SELECTION_DATA.BOOK[0]; 
+            personalQuery = '';
+            updateUI();
+        });
+
+        // 앱 시작 시 초기 UI 렌더링
+        window.onload = updateUI;
+    </script>
+</body>
+</html>
+
